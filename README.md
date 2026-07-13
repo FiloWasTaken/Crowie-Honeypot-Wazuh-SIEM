@@ -2,35 +2,6 @@
 This project demonstrates the deployment and integration of an SSH honeypot using Cowrie with Wazuh SIEM for centralized security monitoring, log collection, and attacker behavior analysis.
 The goal of this laboratory environment is to simulate an exposed SSH service, collect malicious activity, and analyze attacker techniques through a SIEM platform.
 
-Architecture
-                 Internet
-                    |
-                    |
-              SSH Attacks
-                    |
-                    v
-          +----------------+
-          |    Cowrie      |
-          | SSH Honeypot   |
-          +----------------+
-                    |
-              cowrie.json
-                    |
-                    v
-          +----------------+
-          |     Wazuh      |
-          |  Logcollector  |
-          +----------------+
-                    |
-                    v
-          +----------------+
-          | Wazuh Indexer  |
-          +----------------+
-                    |
-                    v
-          +----------------+
-          | Wazuh Dashboard|
-          +----------------+
 Project Objectives
 Deploy an SSH honeypot environment
 Collect attacker interaction logs
@@ -50,7 +21,7 @@ Environment
 
 Operating System:
 
-Linux Server
+Linux Server (Ubuntu)
 
 Security Components:
 
