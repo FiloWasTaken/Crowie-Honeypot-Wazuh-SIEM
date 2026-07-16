@@ -1,159 +1,207 @@
-# Crowie-Honeypot-Wazuh-SIEM
-This project demonstrates the deployment and integration of an SSH honeypot using Cowrie with Wazuh SIEM for centralized security monitoring, log collection, and attacker behavior analysis.
-The goal of this laboratory environment is to simulate an exposed SSH service, collect malicious activity, and analyze attacker techniques through a SIEM platform.
+Documentazione tecnica del setup di un honeypot SSH/Telnet basato su **Cowrie**, monitorato tramite **Wazuh SIEM**, esposto su una VPS pubblica per la raccolta e l'analisi di attacchi reali provenienti da internet.
 
-Project Objectives
-Deploy an SSH honeypot environment
-Collect attacker interaction logs
-Integrate Cowrie JSON events into Wazuh SIEM
-Analyze authentication attacks
-Build visibility into malicious activity
-Practice SOC monitoring workflows
-Technologies Used
-Component	Purpose
-Cowrie	SSH/Telnet honeypot
-Wazuh SIEM	Security monitoring and detection
-Wazuh Indexer	Event storage
-Wazuh Dashboard	Visualization and investigation
-Linux	Host operating system
-JSON Logging	Event format
-Environment
+> **Disclaimer**: questo progetto è a scopo di ricerca/apprendimento in ambito cybersecurity (threat intelligence, detection engineering). L'honeypot non fornisce accesso a sistemi di produzione e non contiene dati sensibili propri; contiene però dati reali raccolti da attacchi effettivi (IP sorgente, credenziali tentate, comandi eseguiti dagli attaccanti), essendo esposto su una VPS pubblica su internet.
 
-Operating System:
+---
 
-Linux Server (Ubuntu)
+## Indice
 
-Security Components:
+- [Obiettivo del progetto](#obiettivo-del-progetto)
+- [Architettura](#architettura)
+- [Stack tecnologico](#stack-tecnologico)
+- [Setup — Cowrie](#setup--cowrie)
+- [Setup — Wazuh](#setup--wazuh)
+- [Integrazione log Cowrie → Wazuh](#integrazione-log-cowrie--wazuh)
+- [Regole e Decoder](#regole-e-decoder)
+- [Verifica del funzionamento](#verifica-del-funzionamento)
+- [Lookup IP e analisi dei comandi eseguiti](#lookup-ip-e-analisi-dei-comandi-eseguiti)
+- [Analisi degli attacchi raccolti](#analisi-degli-attacchi-raccolti)
+- [Considerazioni di sicurezza](#considerazioni-di-sicurezza)
+- [Lezioni apprese / Limiti](#lezioni-apprese--limiti)
+- [Possibili sviluppi futuri](#possibili-sviluppi-futuri)
 
-Cowrie SSH Honeypot
-Wazuh Manager
-Wazuh Indexer
-Wazuh Dashboard
+---
 
-Log source:
+## Obiettivo del progetto
 
-/home/cowrie/my-honeypot/var/log/cowrie/cowrie.json
+L'obiettivo di questo progetto è simulare un servizio SSH/Telnet vulnerabile per:
 
-Log format:
+- Osservare e raccogliere tentativi di accesso non autorizzato provenienti da internet (credential stuffing, brute force, comandi post-login).
+- Centralizzare e analizzare i log dell'honeypot tramite un SIEM (Wazuh), per abituarsi a un flusso realistico di **detection engineering** (log ingestion → parsing → alerting).
+- Costruire un piccolo caso di studio da poter mostrare in un contesto di portfolio/CV.
 
-JSON
-Wazuh Configuration
+---
 
-The Wazuh manager was configured to collect only Cowrie events.
+## Architettura
 
-Configured log source:
+Cowrie e Wazuh (Manager + Dashboard) sono installati **sulla stessa macchina/VM**, una VPS esposta pubblicamente su internet.
 
-<localfile>
-  <log_format>json</log_format>
-  <location>/home/cowrie/my-honeypot/var/log/cowrie/cowrie.json</location>
-</localfile>
+```
+                        INTERNET (attaccanti reali)
+                                 │
+                                 ▼
+                    ┌─────────────────────────┐
+                    │   VPS pubblica          │
+                    │                         │
+                    │  ┌───────────────────┐  │
+                    │  │ Cowrie (honeypot) │  │
+                    │  │ SSH / Telnet      │  │
+                    │  └────────┬──────────┘  │
+                    │           │ log JSON     │
+                    │           ▼              │
+                    │  ┌───────────────────┐  │
+                    │  │ Wazuh Manager     │  │
+                    │  │ (localfile)       │  │
+                    │  └────────┬──────────┘  │
+                    │           ▼              │
+                    │  ┌───────────────────┐  │
+                    │  │ Wazuh Dashboard   │  │
+                    │  └───────────────────┘  │
+                    └─────────────────────────┘
+```
+Wazuh-Manager:
+<br>
+<img width="1354" height="567" alt="image" src="https://github.com/user-attachments/assets/9bb60f23-4fae-45cc-a1a4-278016a927cc" />
 
-The following modules were disabled to create a dedicated honeypot monitoring sensor:
+Cowrie:
+<br>
+<img width="569" height="84" alt="image" src="https://github.com/user-attachments/assets/b3eb4c87-7dc2-41b2-b57f-999e80cea6e9" />
 
-Syscollector
-Rootcheck
-File Integrity Monitoring
-Vulnerability Detection
 
-Reason:
+---
 
-The objective of this deployment is focused exclusively on attacker activity collected by Cowrie.
+## Stack tecnologico
 
-Security Events Collected
+| Componente | Ruolo |
+|---|---|
+| **Cowrie** | Honeypot SSH/Telnet a media interazione, simula una shell e un filesystem falsi |
+| **Wazuh Manager** | Ingestion, parsing (decoder/rule) e generazione alert dai log di Cowrie |
+| **Wazuh Dashboard** | Visualizzazione centralizzata degli alert e dei log |
+| **VPS pubblica** | Hosting di entrambi i servizi, esposta su internet per raccogliere attacchi reali |
 
-The honeypot captures:
+Stack volutamente minimale: nessuna integrazione aggiuntiva (no TheHive, no Shuffle, no notifiche esterne) — focus su honeypot → SIEM.
 
-Failed SSH authentication attempts
-Username enumeration
-Password guessing activity
-Attacker commands
-Session information
-Source IP addresses
-Malware download attempts
+---
 
-Example events:
+## Setup — Cowrie
 
-cowrie.login.failed
-cowrie.command.input
-cowrie.session.connect
-Detection Capabilities
+*(Cowrie è già installato e configurato su questa macchina. Sezione descrittiva del setup esistente, non uno step-by-step da rieseguire.)*
 
-The environment can be used to identify:
+- Installazione in ambiente virtuale Python dedicato (utente non privilegiato, best practice raccomandata da Cowrie per limitare l'impatto in caso di escape dal sandbox).
+- Configurazione principale in `cowrie.cfg` (porte in ascolto, hostname/fake system finto, filesystem simulato).
+- Log applicativi generati in formato **JSON** (`var/log/cowrie/cowrie.json`), oltre al log testuale classico (`cowrie.log`).
+- Porta SSH reale della VPS spostata su una porta non standard (2222), con Cowrie in ascolto sulla porta 22 "esca" per attirare gli scanner automatici e i bot che scansionano il default.
 
-SSH Brute Force
+<img width="1740" height="64" alt="image" src="https://github.com/user-attachments/assets/da37add9-4ce7-4bd4-8fc8-ad6c9f8ac258" />
 
-Indicators:
+Output di `cowrie.json` che mostra un tentativo di login catturato (username, password, IP sorgente).
+</screenshot>
 
-Multiple failed login attempts
-Repeated username/password combinations
-Same source IP targeting SSH
-Attacker Behavior Analysis
+---
 
-Collected information:
+## Setup — Wazuh
 
-Commands executed
-Tools downloaded
-Attack patterns
-Session duration
-Troubleshooting Examples
-Wazuh cannot read Cowrie logs
+Gurdare dei log JSON su un terminale è abbasstanza brutto, quindi ci installiamo un SIEM 
 
-Problem:
+*(Anche Wazuh è già installato e configurato. Sezione descrittiva, non guida all'installazione.)*
 
-Permission denied
+- Wazuh Manager e Dashboard installati sulla stessa VPS dell'honeypot.
+- Configurazione centrale in `/var/ossec/etc/ossec.conf`.
+- Agente locale (self-monitoring) attivo di default sul manager stesso, usato anche per leggere i log di Cowrie tramite `localfile`.
 
-Cause:
+Regole di creazione per gli alert di Cowrie (Nuovo accesso e comandi eseguiti una volta dentro)
+<screenshot>
+Wazuh Dashboard che mostra l'agent/host online e sano (stato "Active").
+</screenshot>
 
-The Wazuh service user did not have access to the Cowrie directory.
+---
 
-Solution:
+## Integrazione log Cowrie → Wazuh
 
-Configured ACL permissions:
+L'integrazione è stata realizzata tramite direttiva **`<localfile>`** nel file `ossec.conf` di Wazuh, puntata direttamente al file di log JSON generato da Cowrie:
 
-setfacl -m u:wazuh:rx /home/cowrie
-Indexer connection issues
+<img width="588" height="98" alt="image" src="https://github.com/user-attachments/assets/a49cdeb0-33fd-4437-9f5c-f5fdf2a86d21" />
 
-Problem:
 
-IndexerConnector initialization failed
+Questo permette a Wazuh di leggere ogni nuova riga del log Cowrie in tempo reale e passarla alla pipeline di parsing/decoding interna, senza bisogno di agenti aggiuntivi (Filebeat) o forwarding syslog: essendo Cowrie e Wazuh sulla stessa macchina, la lettura diretta del file è la soluzione più semplice ed efficace.
 
-Cause:
+<screenshot>
+Estratto di `ossec.conf` con il blocco `<localfile>` configurato (conferma della configurazione realmente in uso).
+</screenshot>
 
-Missing or incorrect Indexer authentication configuration.
+---
 
-Solution:
+Durante la configurazione del tutto ho riscontrato un problema ovvero che i log di cowrie venivano letti dal SIEM ma non riuscivo a vederli sulla dashboard perchè non c'era nessuna regola per quanto 
+riguardava gli alert dato che eventi e alert sono due cose ben diverse, quindi ho creato due regole per poter generare gli eventi una per il login avvenuto con successo (Cowrie accetta ogni credenziale) 
+ed una per vedere che comandi sono stati eseguiti una volta che il bot è entrato nell honeypot, dico bot perchè di solito sono dei computer/VPS infetti con script automatici che fanno brute force, una volta dentro eseguono uno o due comandi e questo informazioni vengono mandate all'attaccante vero e proprio.
 
-Verified:
+Regola per login:
+<br>
+<img width="689" height="169" alt="image" src="https://github.com/user-attachments/assets/aa207c8b-ed7d-4143-b0bb-5be1ecad6ac7" />
 
-Wazuh Indexer availability
-Credentials
-TLS certificates
-Keystore configuration
-Skills Demonstrated
-SIEM deployment
-Linux administration
-Log collection and parsing
-Security monitoring
-Honeypot deployment
-Incident investigation
-Threat detection
-Blue Team operations
-Future Improvements
+Regola per comando eseguito:
+<br>
+<img width="829" height="252" alt="image" src="https://github.com/user-attachments/assets/4d79dfb5-949b-4bd0-a998-5e490fbb7008" />
 
-Possible improvements:
 
-Add custom Wazuh detection rules
-Map Cowrie events to MITRE ATT&CK techniques
-Automate IP reputation checks
-Create threat intelligence enrichment
-Build automated attack reports
-Author
+Dopo aver lasciato qualche giorno la porta 22 aperta possiamo vedere che abbiamo ricevuto all'incrica 12,900 alerts:
 
-Cybersecurity Laboratory Project
+<img width="1486" height="512" alt="image" src="https://github.com/user-attachments/assets/0d78662b-39ec-42ed-935c-a2fb8411f2cb" />
 
-Focus areas:
 
-SOC Analysis
-Defensive Security
-Threat Detection
-SIEM Engineering
+---
+
+## Verifica del funzionamento
+
+Questa sezione documenta le prove che l'intera pipeline (Cowrie → log → Wazuh → alert) funziona correttamente end-to-end, con attacchi reali intercettati dall'honeypot esposto su internet.
+
+### 1. Tentativi di connessione intercettati da Cowrie
+
+
+Log che mostra una sessione SSH in ingresso da un IP esterno reale (con timestamp e IP sorgente visibili).
+<br>
+<img width="1465" height="532" alt="image" src="https://github.com/user-attachments/assets/f9b054b5-4941-48aa-9a03-6bf90aad2dd4" />
+
+### 2. Comandi eseguiti dall'attaccante nella shell finta
+
+Andiamo a filtrare i log per i comandi eseguiti da questo indirizzo IP con qeusta query: rule.id: 100200 and data.src_ip: "141.11.88.243"
+dove rule.id va a specificare la regola che abbiamo creato prima e il secondo campo filtra per l'indirizzo IP che ci interessa
+
+
+### 4. Alert generato su Wazuh Dashboard
+I timestamp potrebbero non combaciare perchè il bot ha provate molte volte ad entrare nel server.
+<img width="1482" height="475" alt="image" src="https://github.com/user-attachments/assets/4885728d-a758-42b3-9fec-4bb59dbde9d5" />
+
+
+## Lookup IP e analisi dei comandi eseguiti
+
+Una volta raccolti gli eventi da Cowrie, ho svolto un'attività manuale di analisi su alcuni IP e comandi ritenuti più interessanti, per capire meglio la natura degli attacchi ricevuti.
+
+### 1. Lookup degli indirizzi IP attaccanti
+
+Prendiamo l'indirizzo IP che abbiamo negli screenshot, facendo un lookup su AbuseIPDB possiamo vedere che questo indirizzo è malevolo:
+<br>
+<img width="1556" height="786" alt="image" src="https://github.com/user-attachments/assets/2eb47663-981a-42c1-b7fa-5ca48a578125" />
+
+
+### 2. Comandi eseguiti dagli attaccanti nella shell simulata
+
+Analisi dei comandi effettivamente digitati dagli attaccanti una volta "entrati" nella shell finta di Cowrie (utile per capire l'intento: reconnaissance, tentativo di download di malware, tentativo di persistenza, ecc.).
+Possiamo vedere che il comando eseguito è uname -s -v -n -r -m, comando usato per reperire informazioni sulla macchina appena "bucata" molto probabilmente poi queste informazioni verranno mandate all attacante.
+
+### 3. Ricerca di un comando specifico eseguito da un IP specifico
+
+Nel caso di prima il comando eseguito è stato solamente uname -s -v -n -r -m, ma se vogliamo vedere dei comandi specifici ?
+La seguente query ce lo permette: rule.id: 100200 and <Comando>,
+ad esempio:
+rule.id: 100200 and whoami ci restituisce il seguente risultato:
+<img width="1509" height="446" alt="image" src="https://github.com/user-attachments/assets/caaa2b3c-5316-41e2-bb3d-d78f0cd8269f" />
+
+---
+
+## Considerazioni di sicurezza
+
+- L'honeypot è isolato logicamente dal resto del sistema (utente dedicato non privilegiato, sandbox Cowrie).
+- La porta SSH reale della VPS è stata spostata su una porta non standard per separarla da quella "esca" di Cowrie.
+- Wazuh, essendo sulla stessa macchina esposta, rappresenta un potenziale punto di attacco secondario: va monitorato l'accesso al Dashboard (autenticazione, firewall sulle porte 443/55000) per evitare che diventi esso stesso un vettore di compromissione.
+- Nessun dato reale o credenziale valida è presente sulla macchina.
